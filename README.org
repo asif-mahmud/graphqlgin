@@ -2,4 +2,4 @@
 #+AUTHOR: Asif Mahmud Shimon
 
 * GraphQL handler for gin
-[[https://github.com/asif-mahmud/graphql-go-gin/actions/workflows/Go/badge.svg][Go Tests]]
+[[https://github.com/asif-mahmud/graphql-go-gin/actions/workflows/go.yml/badge.svg][Go Tests]]
