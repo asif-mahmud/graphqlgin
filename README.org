@@ -1,0 +1,4 @@
+#+STARTUP: indent showall
+#+AUTHOR: Asif Mahmud Shimon
+
+* GraphQL handler for gin
