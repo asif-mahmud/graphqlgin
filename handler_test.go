@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +41,14 @@ var ginContextQuery = &graphql.Field{
 	},
 }
 
+var contextQuery = &graphql.Field{
+	Type: graphql.Int,
+	Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+		value := p.Context.Value("value").(int)
+		return value, nil
+	},
+}
+
 var schema, _ = graphql.NewSchema(graphql.SchemaConfig{
 	Query: graphql.NewObject(graphql.ObjectConfig{
 		Name: "Query",
@@ -47,6 +56,7 @@ var schema, _ = graphql.NewSchema(graphql.SchemaConfig{
 			"hello":      helloQuery,
 			"double":     doubleQuery,
 			"ginContext": ginContextQuery,
+			"context":    contextQuery,
 		},
 	}),
 })
@@ -256,5 +266,46 @@ func TestGinContextPOST(t *testing.T) {
 	}
 	if !helloRes.Data.Found {
 		t.Errorf("Response incorrect. Found %v, expected %v", helloRes.Data.Found, true)
+	}
+}
+
+func TestContextFunctionPOST(t *testing.T) {
+	app := New(schema, func(c *gin.Context, ctx context.Context) context.Context {
+		return context.WithValue(ctx, "value", 5)
+	})
+	router := setupRouter(app)
+
+	type ctxData struct {
+		Value int `json:"context"`
+	}
+	type ctxResponse struct {
+		Data ctxData `json:"data"`
+	}
+
+	query := map[string]interface{}{
+		"query":         "query context { context }",
+		"operationName": "context",
+		"variables":     map[string]interface{}{},
+	}
+	queryBody, _ := json.Marshal(query)
+
+	recorder := httptest.NewRecorder()
+	request, _ := http.NewRequest("POST", "/", bytes.NewBuffer(queryBody))
+	request.Header.Add("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Request failed. Code: %d", recorder.Code)
+	}
+	var ctxRes ctxResponse
+	body := recorder.Body.Bytes()
+
+	// run tests
+	if err := json.Unmarshal(body, &ctxRes); err != nil {
+		t.Errorf("Response unmarshal failed. Err: %v", err)
+	}
+	if ctxRes.Data.Value != 5 {
+		t.Errorf("Response incorrect. Found %d, expected %d", ctxRes.Data.Value, 5)
 	}
 }
