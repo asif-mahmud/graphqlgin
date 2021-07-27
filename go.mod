@@ -1,4 +1,4 @@
-module github.com/asif-mahmud/handler
+module github.com/asif-mahmud/graphqlgin
 
 go 1.16
 
