@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -49,6 +50,75 @@ var contextQuery = &graphql.Field{
 	},
 }
 
+var fileObject = graphql.NewObject(graphql.ObjectConfig{
+	Name: "FileObject",
+	Fields: graphql.Fields{
+		"filename": &graphql.Field{
+			Type: graphql.String,
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				fileheader := p.Source.(*multipart.FileHeader)
+				return fileheader.Filename, nil
+			},
+		},
+		"size": &graphql.Field{
+			Type: graphql.Int,
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				fileheader := p.Source.(*multipart.FileHeader)
+				return int(fileheader.Size), nil
+			},
+		},
+	},
+})
+
+var singleFileMutation = &graphql.Field{
+	Args: graphql.FieldConfigArgument{
+		"file": &graphql.ArgumentConfig{
+			Type: UploadType,
+		},
+	},
+	Type: fileObject,
+	Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+		return p.Args["file"], nil
+	},
+}
+
+var multiFileMutation = &graphql.Field{
+	Args: graphql.FieldConfigArgument{
+		"files": &graphql.ArgumentConfig{
+			Type: graphql.NewList(UploadType),
+		},
+	},
+	Type: graphql.NewList(fileObject),
+	Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+		return p.Args["files"], nil
+	},
+}
+
+var singleFileWithValueMutation = &graphql.Field{
+	Args: graphql.FieldConfigArgument{
+		"file": &graphql.ArgumentConfig{
+			Type: UploadType,
+		},
+		"value": &graphql.ArgumentConfig{
+			Type: graphql.Int,
+		},
+	},
+	Type: graphql.NewObject(graphql.ObjectConfig{
+		Name: "FileAndValue",
+		Fields: graphql.Fields{
+			"file": &graphql.Field{
+				Type: fileObject,
+			},
+			"value": &graphql.Field{
+				Type: graphql.Int,
+			},
+		},
+	}),
+	Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+		return p.Args, nil
+	},
+}
+
 var schema, _ = graphql.NewSchema(graphql.SchemaConfig{
 	Query: graphql.NewObject(graphql.ObjectConfig{
 		Name: "Query",
@@ -57,6 +127,14 @@ var schema, _ = graphql.NewSchema(graphql.SchemaConfig{
 			"double":     doubleQuery,
 			"ginContext": ginContextQuery,
 			"context":    contextQuery,
+		},
+	}),
+	Mutation: graphql.NewObject(graphql.ObjectConfig{
+		Name: "Mutation",
+		Fields: graphql.Fields{
+			"singleUpload":       singleFileMutation,
+			"multiUpload":        multiFileMutation,
+			"singleFileAndValue": singleFileWithValueMutation,
 		},
 	}),
 })
@@ -222,11 +300,11 @@ func TestValiablesGET(t *testing.T) {
 
 func TestFileTypeScalarAdded(t *testing.T) {
 	app := New(schema)
-	fileType, ok := app.Schema.TypeMap()["File"]
+	fileType, ok := app.Schema.TypeMap()["Upload"]
 	if !ok {
 		t.Errorf("File is not found in TypeMap")
 	}
-	if fileType.Name() != "File" {
+	if fileType.Name() != "Upload" {
 		t.Errorf("File is not found in TypeMap")
 	}
 }
@@ -307,5 +385,189 @@ func TestContextFunctionPOST(t *testing.T) {
 	}
 	if ctxRes.Data.Value != 5 {
 		t.Errorf("Response incorrect. Found %d, expected %d", ctxRes.Data.Value, 5)
+	}
+}
+
+func TestSingleFileUploadPOST(t *testing.T) {
+	app := New(schema)
+	router := setupRouter(app)
+
+	type fileData struct {
+		Filename string `json:"filename"`
+		Size     int    `json:"size"`
+	}
+	type mutationWrapper struct {
+		Mutation fileData `json:"singleUpload"`
+	}
+	type fileResponse struct {
+		Data mutationWrapper `json:"data"`
+	}
+
+	operations := map[string]interface{}{
+		"query":         `mutation uploadFile ( $file: Upload! ) { singleUpload( file: $file ) { filename size } }`,
+		"operationName": "uploadFile",
+		"variables": map[string]interface{}{
+			"file": nil,
+		},
+	}
+	operationsBody, _ := json.Marshal(operations)
+
+	buff := bytes.NewBuffer(nil)
+	form := multipart.NewWriter(buff)
+	form.WriteField("operations", string(operationsBody))
+	form.WriteField("map", `{"file": ["variables.file"]}`)
+	w, _ := form.CreateFormFile("file", "hello.txt")
+	w.Write([]byte("Hello, World"))
+	form.Close()
+
+	recorder := httptest.NewRecorder()
+	request, _ := http.NewRequest("POST", "/", buff)
+	request.Header.Add("Content-Type", form.FormDataContentType())
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Request failed. Code: %d", recorder.Code)
+	}
+	var res fileResponse
+	body := recorder.Body.Bytes()
+
+	// run tests
+	if err := json.Unmarshal(body, &res); err != nil {
+		t.Errorf("Response unmarshal failed. Err: %v", err)
+	}
+	if res.Data.Mutation.Filename != "hello.txt" {
+		t.Errorf("File name incorrect. expected %s found %s", "hello.txt", res.Data.Mutation.Filename)
+	}
+	if res.Data.Mutation.Size != 12 {
+		t.Errorf("File size incorrect. expected %d found %d", 12, res.Data.Mutation.Size)
+	}
+}
+
+func TestMultipleFileUploadPOST(t *testing.T) {
+	app := New(schema)
+	router := setupRouter(app)
+
+	type fileData struct {
+		Filename string `json:"filename"`
+		Size     int    `json:"size"`
+	}
+	type mutationWrapper struct {
+		Mutation []fileData `json:"multiUpload"`
+	}
+	type fileResponse struct {
+		Data mutationWrapper `json:"data"`
+	}
+
+	operations := map[string]interface{}{
+		"query":         `mutation uploadFile ( $files: [Upload!]! ) { multiUpload( files: $files ) { filename size } }`,
+		"operationName": "uploadFile",
+		"variables": map[string]interface{}{
+			"files": []interface{}{nil, nil},
+		},
+	}
+	operationsBody, _ := json.Marshal(operations)
+
+	buff := bytes.NewBuffer(nil)
+	form := multipart.NewWriter(buff)
+	form.WriteField("operations", string(operationsBody))
+	form.WriteField("map", `{"0": ["variables.files.0"], "1": ["variables.files.1"]}`)
+	w, _ := form.CreateFormFile("0", "hello.txt")
+	w.Write([]byte("Hello, World"))
+	w2, _ := form.CreateFormFile("1", "bingo.txt")
+	w2.Write([]byte("Bingo"))
+	form.Close()
+
+	recorder := httptest.NewRecorder()
+	request, _ := http.NewRequest("POST", "/", buff)
+	request.Header.Add("Content-Type", form.FormDataContentType())
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Request failed. Code: %d", recorder.Code)
+	}
+	var res fileResponse
+	body := recorder.Body.Bytes()
+
+	// run tests
+	if err := json.Unmarshal(body, &res); err != nil {
+		t.Errorf("Response unmarshal failed. Err: %v", err)
+	}
+	if res.Data.Mutation[0].Filename != "hello.txt" {
+		t.Errorf("File name incorrect. expected %s found %s", "hello.txt", res.Data.Mutation[0].Filename)
+	}
+	if res.Data.Mutation[0].Size != 12 {
+		t.Errorf("File size incorrect. expected %d found %d", 12, res.Data.Mutation[0].Size)
+	}
+	if res.Data.Mutation[1].Filename != "bingo.txt" {
+		t.Errorf("File name incorrect. expected %s found %s", "bingo.txt", res.Data.Mutation[1].Filename)
+	}
+	if res.Data.Mutation[1].Size != 5 {
+		t.Errorf("File size incorrect. expected %d found %d", 5, res.Data.Mutation[1].Size)
+	}
+}
+
+func TestSingleFileAndValuePOST(t *testing.T) {
+	app := New(schema)
+	router := setupRouter(app)
+
+	type fileData struct {
+		Filename string `json:"filename"`
+		Size     int    `json:"size"`
+	}
+	type resData struct {
+		File  fileData `json:"file"`
+		Value int      `json:"value"`
+	}
+	type mutationWrapper struct {
+		Mutation resData `json:"singleFileAndValue"`
+	}
+	type fileResponse struct {
+		Data mutationWrapper `json:"data"`
+	}
+
+	operations := map[string]interface{}{
+		"query":         `mutation uploadFile ( $file: Upload!, $value: Int! ) { singleFileAndValue( file: $file, value: $value ) { file { filename size } value } }`,
+		"operationName": "uploadFile",
+		"variables": map[string]interface{}{
+			"file":  nil,
+			"value": 10,
+		},
+	}
+	operationsBody, _ := json.Marshal(operations)
+
+	buff := bytes.NewBuffer(nil)
+	form := multipart.NewWriter(buff)
+	form.WriteField("operations", string(operationsBody))
+	form.WriteField("map", `{"file": ["variables.file"]}`)
+	w, _ := form.CreateFormFile("file", "hello.txt")
+	w.Write([]byte("Hello, World"))
+	form.Close()
+
+	recorder := httptest.NewRecorder()
+	request, _ := http.NewRequest("POST", "/", buff)
+	request.Header.Add("Content-Type", form.FormDataContentType())
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Request failed. Code: %d", recorder.Code)
+	}
+	var res fileResponse
+	body := recorder.Body.Bytes()
+
+	// run tests
+	if err := json.Unmarshal(body, &res); err != nil {
+		t.Errorf("Response unmarshal failed. Err: %v", err)
+	}
+	if res.Data.Mutation.File.Filename != "hello.txt" {
+		t.Errorf("File name incorrect. expected %s found %s", "hello.txt", res.Data.Mutation.File.Filename)
+	}
+	if res.Data.Mutation.File.Size != 12 {
+		t.Errorf("File size incorrect. expected %d found %d", 12, res.Data.Mutation.File.Size)
+	}
+	if res.Data.Mutation.Value != 10 {
+		t.Errorf("Value incorrect. expected %d found %d", 10, res.Data.Mutation.Value)
 	}
 }
