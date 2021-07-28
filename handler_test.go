@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -570,4 +571,243 @@ func TestSingleFileAndValuePOST(t *testing.T) {
 	if res.Data.Mutation.Value != 10 {
 		t.Errorf("Value incorrect. expected %d found %d", 10, res.Data.Mutation.Value)
 	}
+}
+
+func ExampleGraphQLApp_simple_usage() {
+	// Construct graphql schema
+	schema, _ := graphql.NewSchema(graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"hello": &graphql.Field{
+					Type: graphql.String,
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						return "world", nil
+					},
+				},
+			},
+		}),
+	})
+
+	// Create graphql app instance
+	app := New(schema)
+
+	// Create gin router
+	router := gin.Default()
+
+	// Add graphql handler to the router
+	router.POST("/graphql", app.Handler())
+
+	// Run app server
+	// router.Run()
+
+	// Example capturing of output
+	req, _ := http.NewRequest(
+		"POST",
+		"/graphql",
+		bytes.NewBuffer([]byte(
+			`{"query": "query Hello { hello }", "operationName": "Hello", "variables": {}}`,
+		)))
+	req.Header.Add("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	data := w.Body.Bytes()
+	fmt.Println(string(data))
+
+	// Output:
+	// {"data":{"hello":"world"}}
+}
+
+func ExampleGraphQLApp_single_file_upload() {
+	//  create your own json representation of the uploaded file
+	uploadInfoType := graphql.NewObject(graphql.ObjectConfig{
+		Name: "UploadInfo",
+		Fields: graphql.Fields{
+			"filename": &graphql.Field{
+				Type: graphql.String,
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					file := p.Source.(*multipart.FileHeader)
+					return file.Filename, nil
+				},
+			},
+			"size": &graphql.Field{
+				Type: graphql.Int,
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					file := p.Source.(*multipart.FileHeader)
+					return file.Size, nil
+				},
+			},
+		},
+	})
+	// Construct graphql schema
+	schema, _ := graphql.NewSchema(graphql.SchemaConfig{
+		// just a dummy query, have to include a query with at least one field
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"hello": &graphql.Field{
+					Type: graphql.String,
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						return "world", nil
+					},
+				},
+			},
+		}),
+		Mutation: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Mutation",
+			Fields: graphql.Fields{
+				"uploadFile": &graphql.Field{
+					// use graphqlgin.UploadType like this for file upload scalar
+					Args: graphql.FieldConfigArgument{
+						"file": &graphql.ArgumentConfig{
+							Type: UploadType,
+						},
+					},
+					// use your own type to respond
+					Type: uploadInfoType,
+					// handle the uploaded file anyway you want
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						return p.Args["file"], nil
+					},
+				},
+			},
+		}),
+	})
+
+	// Create graphql app
+	app := New(schema)
+
+	// Create router
+	router := gin.Default()
+
+	// Add graphql handler to the router
+	router.POST("/graphql", app.Handler())
+
+	// Run graphql server
+	// router.Run()
+
+	// Sample output capturing
+	buffer := bytes.NewBuffer(nil)
+	form := multipart.NewWriter(buffer)
+	form.WriteField(
+		"operations",
+		`{"query": "mutation UploadFile ($file: Upload!) { uploadFile(file: $file) { filename size } }",
+                  "operationName": "UploadFile",
+                  "variables": { "file": null }
+                 }`,
+	)
+	form.WriteField(
+		"map",
+		`{"file": ["variables.file"]}`,
+	)
+	w, _ := form.CreateFormFile("file", "hello.txt")
+	w.Write([]byte("Hello, World"))
+	form.Close()
+	req, _ := http.NewRequest("POST", "/graphql", buffer)
+	req.Header.Add("Content-Type", form.FormDataContentType())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	body := rec.Body.Bytes()
+	fmt.Println(string(body))
+
+	// Output:
+	// {"data":{"uploadFile":{"filename":"hello.txt","size":12}}}
+}
+
+func ExampleGraphQLApp_multiple_file_upload() {
+	//  create your own json representation of the uploaded file
+	uploadInfoType := graphql.NewObject(graphql.ObjectConfig{
+		Name: "UploadInfo",
+		Fields: graphql.Fields{
+			"filename": &graphql.Field{
+				Type: graphql.String,
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					file := p.Source.(*multipart.FileHeader)
+					return file.Filename, nil
+				},
+			},
+			"size": &graphql.Field{
+				Type: graphql.Int,
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					file := p.Source.(*multipart.FileHeader)
+					return file.Size, nil
+				},
+			},
+		},
+	})
+	// Construct graphql schema
+	schema, _ := graphql.NewSchema(graphql.SchemaConfig{
+		// just a dummy query, have to include a query with at least one field
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"hello": &graphql.Field{
+					Type: graphql.String,
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						return "world", nil
+					},
+				},
+			},
+		}),
+		Mutation: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Mutation",
+			Fields: graphql.Fields{
+				"uploadFiles": &graphql.Field{
+					// use graphqlgin.UploadType like this for file upload scalar
+					Args: graphql.FieldConfigArgument{
+						"files": &graphql.ArgumentConfig{
+							Type: graphql.NewList(UploadType),
+						},
+					},
+					// use your own type to respond
+					Type: graphql.NewList(uploadInfoType),
+					// handle the uploaded file anyway you want
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						return p.Args["files"], nil
+					},
+				},
+			},
+		}),
+	})
+
+	// Create graphql app
+	app := New(schema)
+
+	// Create router
+	router := gin.Default()
+
+	// Add graphql handler to the router
+	router.POST("/graphql", app.Handler())
+
+	// Run graphql server
+	// router.Run()
+
+	// Sample output capturing
+	buffer := bytes.NewBuffer(nil)
+	form := multipart.NewWriter(buffer)
+	form.WriteField(
+		"operations",
+		`{"query": "mutation ($files: [Upload!]!) { uploadFiles(files: $files) { filename size } }",
+                  "operationName": "",
+                  "variables": { "files": [null, null] }
+                 }`,
+	)
+	form.WriteField(
+		"map",
+		`{"0": ["variables.files.0"], "1": ["variables.files.1"]}`,
+	)
+	w, _ := form.CreateFormFile("0", "hello.txt")
+	w.Write([]byte("Hello, World"))
+	w2, _ := form.CreateFormFile("1", "bingo.txt")
+	w2.Write([]byte("Bingo"))
+	form.Close()
+	req, _ := http.NewRequest("POST", "/graphql", buffer)
+	req.Header.Add("Content-Type", form.FormDataContentType())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	body := rec.Body.Bytes()
+	fmt.Println(string(body))
+
+	// Output:
+	// {"data":{"uploadFiles":[{"filename":"hello.txt","size":12},{"filename":"bingo.txt","size":5}]}}
 }
