@@ -811,3 +811,136 @@ func ExampleGraphQLApp_multiple_file_upload() {
 	// Output:
 	// {"data":{"uploadFiles":[{"filename":"hello.txt","size":12},{"filename":"bingo.txt","size":5}]}}
 }
+
+func ExampleGraphQLApp_add_custom_headers() {
+	// Create schema
+	schema, _ := graphql.NewSchema(graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"header": &graphql.Field{
+					Type: graphql.String,
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						c := GetGinContext(p.Context)
+						c.Header("Custom-Header", "some-header-value")
+						return "hello", nil
+					},
+				},
+			},
+		}),
+	})
+
+	// Create graphql app
+	app := New(schema)
+
+	// Create router
+	router := gin.Default()
+
+	// Add graphql handler
+	router.POST("/graphql", app.Handler())
+
+	// Run server
+	// router.Run()
+
+	// Sample output capture
+	req, _ := http.NewRequest(
+		"POST",
+		"/graphql",
+		bytes.NewBuffer([]byte(`{"query": "query { header }", "operationName": "", "variables": {}}`)),
+	)
+	req.Header.Add("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	headers := w.Header()
+	body := string(w.Body.Bytes())
+
+	fmt.Println("Headers:")
+	fmt.Println(headers)
+	fmt.Println("Body:")
+	fmt.Println(body)
+
+	// Output:
+	// Headers:
+	// map[Content-Type:[application/json; charset=utf-8] Custom-Header:[some-header-value]]
+	// Body:
+	// {"data":{"header":"hello"}}
+}
+
+func ExampleGraphQLApp_context_usage() {
+	// Your example database
+	userStore := []map[string]interface{}{
+		map[string]interface{}{
+			"name":  "John",
+			"email": "a@b.c",
+		},
+		map[string]interface{}{
+			"name":  "Kratos",
+			"email": "c@b.a",
+		},
+	}
+
+	// Create schema
+	schema, _ := graphql.NewSchema(graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"users": &graphql.Field{
+					Type: graphql.NewList(graphql.NewObject(graphql.ObjectConfig{
+						Name: "User",
+						Fields: graphql.Fields{
+							"name": &graphql.Field{
+								Type: graphql.String,
+							},
+							"email": &graphql.Field{
+								Type: graphql.String,
+							},
+						},
+					})),
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						// retrieve the store/database from the context
+						users := p.Context.Value("userStore").([]map[string]interface{})
+						// use it as you want
+						return users, nil
+					},
+				},
+			},
+		}),
+	})
+
+	// Create graphql app
+	// You can add your context provider here or when attaching the handler to a route
+	app := New(schema, func(c *gin.Context, ctx context.Context) context.Context {
+		return context.WithValue(ctx, "userStore", userStore)
+	})
+
+	// Create router
+	router := gin.Default()
+
+	// Add handler
+	router.POST("/graphql", app.Handler())
+	// You could add your context providers here too
+	// router.POST("/graphql", app.Handler(func(c *gin.Context, ctx context.Context) context.Context {
+	// 	return context.WithValue(ctx, "userStore", userStore)
+	// }))
+
+	// Run server
+	// router.Run()
+
+	// Sample output capture
+	req, _ := http.NewRequest(
+		"POST",
+		"/graphql",
+		bytes.NewBuffer([]byte(`{"query": "query { users { name email } }", "operationName": "", "variables": {}}`)),
+	)
+	req.Header.Add("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	body := string(w.Body.Bytes())
+
+	fmt.Println(body)
+
+	// Output:
+	// {"data":{"users":[{"email":"a@b.c","name":"John"},{"email":"c@b.a","name":"Kratos"}]}}
+}
