@@ -1,4 +1,9 @@
 ## GraphQL handler for gin
+
+*NOTICE:* Please use [gingraphql](https://github.com/asif-mahmud/gingraphql) package instead of 
+this one as it is wrongly versioned, and `go get` fails to get the latest version of this 
+package. This has been fixed in that repo.
+
 ![go workflow](https://github.com/asif-mahmud/graphqlgin/actions/workflows/go.yml/badge.svg)
 
 This is a small package to provide a [GraphQL](https://graphql.org/) handler that can be used with
